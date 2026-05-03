@@ -4,6 +4,7 @@
 set -euo pipefail
 
 MAX_FINDINGS=100
+MAX_PER_CATEGORY_PER_FILE=20  # cap per high-volume check per file so one category can't fill MAX_FINDINGS
 
 fail() {
   local type="$1" msg="$2" suggestion="$3"
@@ -41,13 +42,26 @@ analyze_html() {
   grep -qi '<title>'             "$file" || ISSUES+=("$file:0: Missing <title> tag")
 
   # <img> without alt — two-pass replaces broken PCRE lookahead
+  local alt_count=0
   while IFS=: read -r ln tag; do
-    grep -qE 'alt=' <<<"$tag" || WARNINGS+=("$file:$ln: <img> without alt attribute")
+    if grep -qE 'alt=' <<<"$tag"; then continue; fi
+    if [ "$alt_count" -ge "$MAX_PER_CATEGORY_PER_FILE" ]; then
+      WARNINGS+=("$file:0: <img>-without-alt findings truncated (>${MAX_PER_CATEGORY_PER_FILE} in this file)")
+      break
+    fi
+    WARNINGS+=("$file:$ln: <img> without alt attribute")
+    alt_count=$((alt_count + 1))
   done < <(grep -noE '<img[^>]*>' "$file" || true)
 
   # Non-HTTPS URLs with line numbers
+  local http_count=0
   while IFS=: read -r ln _; do
+    if [ "$http_count" -ge "$MAX_PER_CATEGORY_PER_FILE" ]; then
+      WARNINGS+=("$file:0: Non-HTTPS URL findings truncated (>${MAX_PER_CATEGORY_PER_FILE} in this file)")
+      break
+    fi
     WARNINGS+=("$file:$ln: Non-HTTPS URL")
+    http_count=$((http_count + 1))
   done < <(grep -noE 'http://[^"'\''[:space:]>]*' "$file" || true)
 }
 
